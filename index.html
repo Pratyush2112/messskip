@@ -290,11 +290,12 @@ const TABS = {
 
 const KEY = 'messskip-demo-v3';
 const fresh = () => ({ v:3, role:'student', tab:{ student:'pass', manager:'cook', gsec:'overview' }, skips:{}, rules:[{dow:6,meal:3,from:'2000-01-01'}],
-  cutoff:22, buffer:5, remind:true, mgrDay:1, scanMeal:null, scans:[], lastResult:null, leftovers:{} });
+  cutoff:22, buffer:5, remind:true, mgrDay:1, scanSlot:null, scans:[], lastResult:null, leftovers:{} });
 function load(){ try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.v === 3) return Object.assign(fresh(), s); } catch(e){} return fresh(); }
 let state = load();
 state.tab.student = 'pass';   // the student app always opens on the mess pass
 state.lastResult = null;
+state.scanSlot = null; // the door always starts on the meal being served now (or the next one)
 function save(){ try { localStorage.setItem(KEY, JSON.stringify(state)); } catch(e){} }
 
 /* ---------- helpers ---------- */
@@ -510,33 +511,41 @@ function renderCook(){
     <p class="muted small" style="margin-top:8px">Days further out will drop as more students plan their skips.</p>
   </section>`;
 }
-function inSoFar(m){
-  const ml = MEALS[m], now = nowMin(), s = toMin(ml.start), e = toMin(ml.end), exp = eaters(today(),m);
-  let base = now < s ? 0 : now > e ? exp - 2 - Math.round(hash(dkey(today())+'x'+m)*5) : Math.round(exp * (now - s) / (e - s) * .95);
-  const mine = state.scans.filter(x => x.type === 'ok' && x.m === m && x.day === dkey(today())).length;
+function doorSlot(){
+  if (state.scanSlot){ const [d,m] = state.scanSlot.split('|'); return { date: fromKey(d), m: Number(m) }; }
+  const cm = currentOrNextMeal(); return { date: cm.date, m: cm.m };
+}
+function slotName(date,m){ return `${dayLabel(date).toLowerCase()}’s ${MEALS[m].name.toLowerCase()}`; }
+function inSoFar(date,m){
+  const ml = MEALS[m], now = nowMin(), s = toMin(ml.start), e = toMin(ml.end), exp = eaters(date,m);
+  const isToday = dkey(date) === dkey(today());
+  let base = !isToday || now < s ? 0 : now > e ? exp - 2 - Math.round(hash(dkey(date)+'x'+m)*5) : Math.round(exp * (now - s) / (e - s) * .95);
+  const mine = state.scans.filter(x => x.type === 'ok' && x.m === m && x.day === dkey(date)).length;
   return Math.max(0, base) + mine;
 }
 function viewfinderInner(){
   const corners = '<div class="corners" aria-hidden="true"><i></i><i></i><i></i><i></i></div><div class="line" aria-hidden="true"></div>';
   if (cam.mode === 'live') return `<video id="cam-video" playsinline muted autoplay></video>${corners}<span class="tag">Scanning</span><button type="button" class="stop" id="cam-stop">Stop camera</button>`;
   if (cam.mode === 'starting') return `${corners}<div class="msg">Asking for the camera…</div>`;
-  if (cam.mode === 'demo'){ const mi = state.scanMeal ?? currentOrNextMeal().m; return `<div class="mock" aria-hidden="true"><b style="background:var(${MEAL_VAR[mi]})">${MEALS[mi].name}</b><span></span></div>${corners}<span class="tag">Preview</span><div class="msg" style="align-self:end;margin-bottom:14px;font-size:.84rem">${esc(cam.note || '')}</div>`; }
+  if (cam.mode === 'demo'){ const mi = doorSlot().m; return `<div class="mock" aria-hidden="true"><b style="background:var(${MEAL_VAR[mi]})">${MEALS[mi].name}</b><span></span></div>${corners}<span class="tag">Preview</span><div class="msg" style="align-self:end;margin-bottom:14px;font-size:.84rem">${esc(cam.note || '')}</div>`; }
   return `${corners}<div class="msg">Point the camera at a student’s mess pass.<br><button type="button" class="btn" id="cam-start">Start camera</button></div>`;
 }
 function renderDoor(){
-  const scanM = state.scanMeal ?? currentOrNextMeal().m;
-  const ml = MEALS[scanM];
+  const slot = doorSlot(), scanM = slot.m, ml = MEALS[scanM];
+  const t = today(), tm = addDays(t,1);
+  const opts = [...MEALS.map((_,i) => [dkey(t)+'|'+i, `Today’s ${MEALS[i].name.toLowerCase()}`]), [dkey(tm)+'|0', 'Tomorrow’s breakfast']];
+  const cur = dkey(slot.date)+'|'+scanM;
   const r = state.lastResult;
   const result = r ? `<div class="result ${r.cls}" role="status"><strong>${esc(r.title)}</strong>${esc(r.msg)}</div>` : '';
   const log = state.scans.length ? `<h2 style="margin-top:24px">Recent checks</h2><ul class="log">${state.scans.slice(0,6).map(s => `<li><span>${esc(s.roll)}, ${esc(MEALS[s.m] ? MEALS[s.m].name.toLowerCase() : '')}</span><span class="r-${s.cls}">${esc(s.title)}</span></li>`).join('')}</ul>` : '';
   return `
   <section>
     <div class="doorhead">
-      <div><div class="muted small">Today’s ${ml.name.toLowerCase()}, ${timeLabel(ml.start)} to ${timeLabel(ml.end)}</div><h1 style="margin:2px 0 0">Door check</h1></div>
-      <div style="text-align:right"><div class="n" id="in-count">${inSoFar(scanM)} <span class="muted" style="font-size:1rem;font-weight:600">of ${eaters(today(),scanM)}</span></div><div class="muted small">in so far, of those expected</div></div>
+      <div><div class="muted small">${dayLabel(slot.date)}’s ${ml.name.toLowerCase()}, ${timeLabel(ml.start)} to ${timeLabel(ml.end)}</div><h1 style="margin:2px 0 0">Door check</h1></div>
+      <div style="text-align:right"><div class="n" id="in-count">${inSoFar(slot.date,scanM)} <span class="muted" style="font-size:1rem;font-weight:600">of ${eaters(slot.date,scanM)}</span></div><div class="muted small">in so far, of those expected</div></div>
     </div>
     <div class="row" style="margin-bottom:10px"><label for="scan-meal" class="muted small">Checking for</label>
-      <select id="scan-meal">${MEALS.map((m,i) => `<option value="${i}" ${i===scanM?'selected':''}>${m.name}</option>`).join('')}</select></div>
+      <select id="scan-meal">${opts.map(([v,l]) => `<option value="${v}" ${v===cur?'selected':''}>${l}</option>`).join('')}</select></div>
     <div class="viewfinder ${cam.flash ? 'flash-' + cam.flash : ''} ${cam.reading ? 'reading' : ''}" id="viewfinder">${viewfinderInner()}</div>
     ${result}
     <h2 style="margin-top:20px">Try a scan</h2>
@@ -594,7 +603,7 @@ async function scanLoop(){
     if (text){
       const roll = text.startsWith('MESSSKIP|') ? text.split('|')[1] : text;
       const now = Date.now();
-      if (roll !== cam.last || now - cam.lastAt > 4000){ cam.last = roll; cam.lastAt = now; runScan(roll, true); }
+      if (roll !== cam.last || now - cam.lastAt > 4000){ cam.last = roll; cam.lastAt = now; runScan(text, true); }
     }
   }
   cam.raf = requestAnimationFrame(scanLoop);
@@ -610,23 +619,31 @@ function simulateScan(roll){
   cam.reading = true; refreshViewfinder();
   setTimeout(() => { cam.reading = false; runScan(roll, true); }, 650);
 }
-function checkEntry(raw, m){
-  const roll = String(raw).trim().toUpperCase();
-  const meal = MEALS[m].name.toLowerCase();
+function parseScan(raw){
+  const txt = String(raw).trim();
+  if (txt.startsWith('MESSSKIP|')){ const [, roll, d, k] = txt.split('|'); const m = MEALS.findIndex(x => x.k === k); return { roll: (roll || '').toUpperCase(), d, m }; }
+  return { roll: txt.toUpperCase(), d: null, m: -1 };
+}
+function checkEntry(raw, date, m){
+  const p = parseScan(raw), roll = p.roll, what = slotName(date, m);
   if (!/^\d{2}[A-Z]{2}\d{5}$/.test(roll)) return { cls:'warn', title:'That doesn’t look like a roll number', msg:'Roll numbers look like 22ME30041. Try scanning again.', roll: roll || 'Blank' };
   if (!HALL_ROLLS.has(roll)) return { cls:'no', title:'Not from this hall', msg:`${roll} isn’t on this hall’s mess list. They’ll need to eat in their own hall.`, roll, type:'outsider' };
-  const out = roll === ME.roll ? mySkip(today(), m) : roll === '22CS10077';
-  if (out) return { cls:'no', title:'Skipped this meal', msg:`${roll} skipped today’s ${meal}, so it wasn’t cooked for them.`, roll, type:'optout' };
-  if (state.scans.some(s => s.roll === roll && s.m === m && s.day === dkey(today()) && s.type === 'ok')) return { cls:'warn', title:'Already in', msg:`${roll} has already been checked in for ${meal} today.`, roll, type:'repeat' };
-  return { cls:'ok', title:'Good to go', msg:`${roll} can have today’s ${meal}.`, roll, type:'ok' };
+  if (p.d && p.m >= 0 && (p.d !== dkey(date) || p.m !== m)) {
+    const passFor = slotName(fromKey(p.d), p.m);
+    return { cls:'warn', title:'Pass is for a different meal', msg:`This pass is for ${passFor}, but you’re checking ${what}. If ${MEALS[p.m].name.toLowerCase()} is what’s being served, change “Checking for” and scan again.`, roll, type:'mismatch' };
+  }
+  const out = roll === ME.roll ? mySkip(date, m) : roll === '22CS10077';
+  if (out) return { cls:'no', title:'Skipped this meal', msg:`${roll} skipped ${what}, so it wasn’t cooked for them.`, roll, type:'optout' };
+  if (state.scans.some(s => s.roll === roll && s.m === m && s.day === dkey(date) && s.type === 'ok')) return { cls:'warn', title:'Already in', msg:`${roll} has already been checked in for ${what}.`, roll, type:'repeat' };
+  return { cls:'ok', title:'Good to go', msg:`${roll} can have ${what}.`, roll, type:'ok' };
 }
-function runScan(roll, fromCamera){
+function runScan(raw, fromCamera){
   const sel = document.getElementById('scan-meal');
-  const m = sel ? Number(sel.value) : (state.scanMeal ?? currentOrNextMeal().m);
-  state.scanMeal = m;
-  const r = checkEntry(roll, m);
+  if (sel) state.scanSlot = sel.value;
+  const { date, m } = doorSlot();
+  const r = checkEntry(raw, date, m);
   state.lastResult = r;
-  state.scans.unshift({ roll:r.roll, m, day:dkey(today()), cls:r.cls, title:r.title, type:r.type || 'invalid' });
+  state.scans.unshift({ roll:r.roll, m, day:dkey(date), cls:r.cls, title:r.title, type:r.type || 'invalid' });
   state.scans = state.scans.slice(0,40);
   cam.flash = r.cls === 'ok' ? 'ok' : r.cls === 'no' ? 'no' : null;
   save(); render();
@@ -869,7 +886,7 @@ document.getElementById('app').addEventListener('click', e => {
 document.getElementById('app').addEventListener('change', e => {
   if (e.target.id === 'cutoff'){ state.cutoff = Number(e.target.value); save(); render(); toast(`Skips now close at ${hourLabel(state.cutoff)} the night before.`); }
   if (e.target.id === 'buffer'){ state.buffer = Number(e.target.value); save(); render(); toast(state.buffer ? `Cooking ${state.buffer}% extra as a buffer.` : 'No buffer. Cooking exactly for the count.'); }
-  if (e.target.id === 'scan-meal'){ state.scanMeal = Number(e.target.value); state.lastResult = null; save(); render(); }
+  if (e.target.id === 'scan-meal'){ state.scanSlot = e.target.value; state.lastResult = null; save(); render(); }
   if (e.target.dataset && e.target.dataset.left){
     const v = e.target.value.trim();
     if (v === '') delete state.leftovers[e.target.dataset.left];
